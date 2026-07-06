@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>今日儀表板</title>
+<style>
+  /* ===== E-ink 設計原則:純黑白、高對比、無動畫、大觸控目標 ===== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #fff; color: #000; }
+  body {
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 20px 22px 28px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* ---- 日期與時鐘 ---- */
+  .date {
+    font-size: 20px;
+    letter-spacing: 2px;
+    text-align: center;
+  }
+  .clock {
+    font-family: "Noto Serif TC", "Times New Roman", Georgia, serif;
+    font-size: clamp(96px, 30vw, 168px);
+    font-weight: 700;
+    line-height: 1.05;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 2px;
+  }
+
+  /* ---- 天氣 ---- */
+  .weather {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 10px 0 16px;
+  }
+  .weather .glyph { font-size: 52px; line-height: 1; }
+  .weather .temp  { font-size: 48px; font-weight: 700; }
+  .weather .meta  { font-size: 18px; line-height: 1.5; }
+
+  hr {
+    border: none;
+    border-top: 2px solid #000;
+    margin: 4px 0 14px;
+  }
+
+  h2 {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 6px;
+    margin-bottom: 10px;
+  }
+
+  /* ---- 待辦清單 ---- */
+  .todo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-height: 56px;
+    padding: 6px 4px;
+    border-bottom: 1px solid #999;
+    font-size: 24px;
+    cursor: pointer;
+  }
+  .todo .box {
+    font-size: 26px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .todo .overdue-tag {
+    margin-left: auto;
+    font-size: 15px;
+    border: 1px solid #000;
+    padding: 2px 8px;
+    flex-shrink: 0;
+  }
+  .todo.done { text-decoration: line-through; color: #777; }
+  .empty { font-size: 20px; color: #555; padding: 14px 4px; }
+
+  /* ---- 蕃茄鐘 ---- */
+  .pomodoro { margin-top: 22px; }
+  .pomo-display {
+    text-align: center;
+    font-family: "Noto Serif TC", "Times New Roman", Georgia, serif;
+    font-size: 76px;
+    font-weight: 700;
+    line-height: 1.15;
+    min-height: 90px;
+  }
+  .pomo-mode {
+    text-align: center;
+    font-size: 20px;
+    letter-spacing: 4px;
+    margin-bottom: 2px;
+  }
+  .pomo-squares {
+    text-align: center;
+    font-size: 24px;
+    letter-spacing: 5px;
+    line-height: 1.4;
+    margin: 8px 0 14px;
+    word-break: break-all;
+  }
+  .pomo-buttons {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  button {
+    font-family: inherit;
+    font-size: 22px;
+    min-height: 60px;
+    min-width: 120px;
+    padding: 8px 20px;
+    background: #fff;
+    color: #000;
+    border: 3px solid #000;
+    cursor: pointer;
+  }
+  button.primary { background: #000; color: #fff; }
+  button:disabled { border-color: #aaa; color: #aaa; }
+
+  /* ---- 頁尾 ---- */
+  .footer {
+    margin-top: 26px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 15px;
+    color: #555;
+  }
+  .footer button { min-height: 44px; min-width: 0; font-size: 15px; border-width: 2px; }
+
+  /* ---- 全螢幕反轉(清殘影 / 蕃茄鐘結束提醒)---- */
+  #flash {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #000;
+    z-index: 99;
+  }
+</style>
+</head>
+<body>
+
+<!-- ===================== 設定區:改這裡就好 ===================== -->
+<script>
+const CONFIG = {
+  WORKER_URL: "https://long-lab-c697.noodles-loves.workers.dev/", // Cloudflare Worker 網址
+  LAT: 24.18,   // 台中北屯
+  LON: 120.71,
+  WORK_MIN: 25,           // 蕃茄鐘專注分鐘數
+  BREAK_MIN: 5,           // 休息分鐘數
+  TODO_REFRESH_MIN: 15,   // 待辦更新頻率(分鐘)
+  WEATHER_REFRESH_MIN: 30 // 天氣更新頻率(分鐘)
+};
+</script>
+<!-- ============================================================= -->
+
+<div class="date" id="date">—</div>
+<div class="clock" id="clock">--:--</div>
+
+<div class="weather" id="weather">
+  <span class="glyph" id="wGlyph"></span>
+  <span class="temp" id="wTemp">--°</span>
+  <span class="meta" id="wMeta">載入天氣中…</span>
+</div>
+
+<hr>
+
+<h2>今日待辦</h2>
+<div id="todos"><div class="empty">載入中…</div></div>
+
+<div class="pomodoro">
+  <hr>
+  <div class="pomo-mode" id="pomoMode">蕃 茄 鐘</div>
+  <div class="pomo-display" id="pomoDisplay">25 分</div>
+  <div class="pomo-squares" id="pomoSquares"></div>
+  <div class="pomo-buttons">
+    <button id="btnWork" onclick="setMode('work')">專注 25 分</button>
+    <button id="btnBreak" onclick="setMode('break')">休息 5 分</button>
+    <button id="btnStart" class="primary" onclick="toggleTimer()">開始</button>
+    <button onclick="resetTimer()">重設</button>
+  </div>
+</div>
+
+<div class="footer">
+  <span id="lastUpdate">—</span>
+  <button onclick="clearGhost()">清除殘影</button>
+</div>
+
+<div id="flash"></div>
+
+<script>
+/* ==================== 時鐘(每分鐘更新一次,對齊整分)==================== */
+const WEEKDAYS = ["日","一","二","三","四","五","六"];
+function updateClock() {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  document.getElementById("clock").textContent = hh + ":" + mm;
+  document.getElementById("date").textContent =
+    `${now.getFullYear()} 年 ${now.getMonth()+1} 月 ${now.getDate()} 日  星期${WEEKDAYS[now.getDay()]}`;
+  // 對齊下一個整分再更新,避免 E-ink 不必要的刷新
+  setTimeout(updateClock, (60 - now.getSeconds()) * 1000 + 100);
+
+  // 每天凌晨 4 點整頁重新載入,保持頁面新鮮
+  if (now.getHours() === 4 && now.getMinutes() === 0) location.reload();
+}
+
+/* ==================== 天氣(Open-Meteo,免金鑰)==================== */
+// WMO 天氣代碼 → [符號, 中文描述]
+const WMO = {
+  0:["☀","晴朗"], 1:["☀","大致晴朗"], 2:["⛅","多雲時晴"], 3:["☁","陰天"],
+  45:["≡","有霧"], 48:["≡","霧凇"],
+  51:["☂","毛毛雨"], 53:["☂","毛毛雨"], 55:["☂","毛毛雨"],
+  61:["☂","小雨"], 63:["☂","中雨"], 65:["☂","大雨"],
+  66:["☂","凍雨"], 67:["☂","凍雨"],
+  71:["❄","小雪"], 73:["❄","中雪"], 75:["❄","大雪"], 77:["❄","霰"],
+  80:["☂","陣雨"], 81:["☂","陣雨"], 82:["☂","強陣雨"],
+  85:["❄","陣雪"], 86:["❄","陣雪"],
+  95:["⚡","雷雨"], 96:["⚡","雷雨帶冰雹"], 99:["⚡","雷雨帶冰雹"]
+};
+
+async function fetchWeather() {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${CONFIG.LAT}&longitude=${CONFIG.LON}` +
+      `&current=temperature_2m,relative_humidity_2m,weather_code` +
+      `&daily=temperature_2m_max,temperature_2m_min&timezone=auto`;
+    const res = await fetch(url);
+    const d = await res.json();
+    const code = d.current.weather_code;
+    const [glyph, desc] = WMO[code] || ["·", "—"];
+    document.getElementById("wGlyph").textContent = glyph;
+    document.getElementById("wTemp").textContent = Math.round(d.current.temperature_2m) + "°";
+    document.getElementById("wMeta").innerHTML =
+      `${desc}<br>${Math.round(d.daily.temperature_2m_min[0])}° ~ ${Math.round(d.daily.temperature_2m_max[0])}°　濕度 ${d.current.relative_humidity_2m}%`;
+    stampUpdate();
+  } catch (e) {
+    document.getElementById("wMeta").textContent = "天氣載入失敗";
+  }
+}
+
+/* ==================== Notion 待辦 ==================== */
+async function fetchTodos() {
+  const el = document.getElementById("todos");
+  try {
+    const res = await fetch(CONFIG.WORKER_URL);
+    const data = await res.json();
+    if (!data.todos) throw new Error(data.error || "格式錯誤");
+    if (data.todos.length === 0) {
+      el.innerHTML = '<div class="empty">今天沒有待辦事項 ✓</div>';
+    } else {
+      el.innerHTML = data.todos.map(t =>
+        `<div class="todo" onclick="markDone(this, '${t.id}')">
+           <span class="box">□</span>
+           <span>${escapeHtml(t.title)}</span>
+           ${t.overdue ? '<span class="overdue-tag">逾期</span>' : ''}
+         </div>`
+      ).join("");
+    }
+    stampUpdate();
+  } catch (e) {
+    el.innerHTML = '<div class="empty">待辦載入失敗(請檢查 Worker 網址)</div>';
+  }
+}
+
+async function markDone(rowEl, id) {
+  if (!confirm("標記為完成?")) return;
+  rowEl.classList.add("done");
+  rowEl.querySelector(".box").textContent = "■";
+  rowEl.onclick = null;
+  try {
+    await fetch(CONFIG.WORKER_URL + "/done", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id })
+    });
+  } catch (e) { /* 靜默失敗,下次刷新會恢復 */ }
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+}
+
+/* ==================== 蕃茄鐘 ==================== */
+let pomo = { mode: "work", total: 0, remain: 0, running: false, timer: null, lastShownMin: -1 };
+
+function setMode(mode) {
+  pomo.mode = mode;
+  resetTimer();
+}
+
+function resetTimer() {
+  clearInterval(pomo.timer);
+  pomo.running = false;
+  pomo.total = (pomo.mode === "work" ? CONFIG.WORK_MIN : CONFIG.BREAK_MIN) * 60;
+  pomo.remain = pomo.total;
+  pomo.lastShownMin = -1;
+  document.getElementById("btnStart").textContent = "開始";
+  document.getElementById("pomoMode").textContent = pomo.mode === "work" ? "專 注" : "休 息";
+  renderPomo(true);
+}
+
+function toggleTimer() {
+  if (pomo.running) {
+    clearInterval(pomo.timer);
+    pomo.running = false;
+    document.getElementById("btnStart").textContent = "繼續";
+  } else {
+    pomo.running = true;
+    document.getElementById("btnStart").textContent = "暫停";
+    pomo.timer = setInterval(tick, 1000);
+  }
+}
+
+function tick() {
+  pomo.remain--;
+  if (pomo.remain <= 0) {
+    clearInterval(pomo.timer);
+    pomo.running = false;
+    finishPomo();
+    return;
+  }
+  renderPomo(false);
+}
+
+// E-ink 友善:畫面只在「分鐘數改變」時才更新
+function renderPomo(force) {
+  const min = Math.ceil(pomo.remain / 60);
+  if (!force && min === pomo.lastShownMin) return;
+  pomo.lastShownMin = min;
+  document.getElementById("pomoDisplay").textContent = min + " 分";
+  const totalMin = Math.round(pomo.total / 60);
+  const filled = totalMin - min;
+  document.getElementById("pomoSquares").textContent =
+    "■".repeat(filled) + "□".repeat(min);
+}
+
+function finishPomo() {
+  document.getElementById("pomoDisplay").textContent = "時間到!";
+  document.getElementById("pomoSquares").textContent = "■".repeat(Math.round(pomo.total / 60));
+  // 全螢幕黑白反轉閃爍 3 次(E-ink 上最醒目的提醒方式)
+  flashScreen(3);
+  beep();
+  // 自動切換到另一個模式待命
+  setTimeout(() => { pomo.mode = (pomo.mode === "work") ? "break" : "work"; resetTimer(); }, 5000);
+}
+
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    osc.frequency.value = 880;
+    osc.connect(ctx.destination);
+    osc.start();
+    setTimeout(() => { osc.stop(); ctx.close(); }, 600);
+  } catch (e) { /* 部分裝置不支援,靠畫面閃爍提醒 */ }
+}
+
+/* ==================== 清殘影(全頁反轉)==================== */
+const flashEl = document.getElementById("flash");
+function flashScreen(times) {
+  let n = 0;
+  const step = () => {
+    flashEl.style.display = (n % 2 === 0) ? "block" : "none";
+    n++;
+    if (n < times * 2) setTimeout(step, 400);
+    else flashEl.style.display = "none";
+  };
+  step();
+}
+function clearGhost() { flashScreen(1); }
+
+/* ==================== 更新時間戳 ==================== */
+function stampUpdate() {
+  const now = new Date();
+  document.getElementById("lastUpdate").textContent =
+    "更新於 " + String(now.getHours()).padStart(2,"0") + ":" + String(now.getMinutes()).padStart(2,"0");
+}
+
+/* ==================== 啟動 ==================== */
+updateClock();
+fetchWeather();
+fetchTodos();
+resetTimer();
+setInterval(fetchWeather, CONFIG.WEATHER_REFRESH_MIN * 60 * 1000);
+setInterval(fetchTodos, CONFIG.TODO_REFRESH_MIN * 60 * 1000);
+setInterval(() => { if (!pomo.running) clearGhost(); }, 60 * 60 * 1000); // 每小時自動清殘影(計時中不打擾)
+</script>
+</body>
+</html>
